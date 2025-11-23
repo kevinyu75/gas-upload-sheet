@@ -91,8 +91,9 @@ function 生成Line推播文案_Gemini(name, desc, approxLen) {
   const apiKey = props.getProperty('gemini_api_key');
   if (!apiKey) throw new Error('缺少 gemini_api_key');
 
-  // 目前 API 穩定版本為 gemini-1.5-pro，若有更新版本可在此替換
-  const model  = 'gemini-1.5-pro';
+  // 使用者指定測試模型：Gemini 3.0 Pro Preview
+  // 注意：此模型 ID 可能尚未對外開放，若執行失敗請改回 gemini-1.5-pro 或 gemini-2.0-flash-exp
+  const model  = 'gemini-3.0-pro-preview';
 
   const minLen = Math.max(10, Math.round(approxLen * 0.8));
   const maxLen = Math.round(approxLen * 1.2);
