@@ -145,36 +145,24 @@ function 組FBPostLink_(facebookPostID) {
   return postId ? `${base}${postId}/` : '';
 }
 
-/* ========================= OpenAI 生成 ========================= */
-function chatCallWithRetry_({ apiKey, model, messages, maxTokens }) {
-  const url = 'https://api.openai.com/v1/chat/completions';
-  const payload = { model, temperature: 0.7, max_tokens: maxTokens, messages };
-  const options = { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { Authorization: `Bearer ${apiKey}` }, payload: JSON.stringify(payload) };
-  const MAX_RETRY = 3; let wait = 400;
-  for (let t=0; t<=MAX_RETRY; t++){
-    const resp = UrlFetchApp.fetch(url, options);
-    const code = resp.getResponseCode();
-    if (code === 200) return (JSON.parse(resp.getContentText())?.choices?.[0]?.message?.content || '').replace(/\r?\n/g,' ').trim();
-    if ((code === 429 || code >= 500) && t < MAX_RETRY) { Utilities.sleep(wait); wait = Math.min(wait*2, 2500); continue; }
-    throw new Error('OpenAI API error(' + code + '): ' + resp.getContentText());
-  }
-}
-function 生成文案_OpenAI_約長度_朋友口吻(name, desc, tone, targetLen) {
+/* ========================= Gemini 生成 ========================= */
+function 生成文案_Gemini_約長度_朋友口吻(name, desc, tone, targetLen) {
   const props  = PropertiesService.getScriptProperties();
-  const apiKey = props.getProperty('openai_api_key');
-  if (!apiKey) throw new Error('缺少 openai_api_key');
-  const model  = props.getProperty('openai_model') || 'gpt-4o-mini';
+  const apiKey = props.getProperty('gemini_api_key');
+  if (!apiKey) throw new Error('缺少 gemini_api_key');
+  
+  // 使用者指定測試模型：Gemini 3.0 Pro Preview
+  const model = 'gemini-3.0-pro-preview';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const approx = Math.max(10, Number(targetLen) || 20);
   const minLen = Math.max(12, Math.round(approx * 0.85));
   const maxLen = Math.round(approx * 1.15);
   const productKeyword = 萃取品名關鍵詞_(name, desc);
 
-  const system =
-`你是中文社群文案助手。輸出單一段落（單段、不加標題），口吻自然像朋友分享，避免推銷語氣。可使用 1～3 個 emoji；如資訊提到價格，請避免在文案中重複價格。`;
-  const user =
-`請根據以下商品資訊，寫一段約 ${approx} 字的貼文文案（單段落），口吻：${tone}。
+  const system = `你是中文社群文案助手。輸出單一段落（單段、不加標題），口吻自然像朋友分享，避免推銷語氣。可使用 1～3 個 emoji；如資訊提到價格，請避免在文案中重複價格。`;
+  
+  const userPrompt = `請根據以下商品資訊，寫一段約 ${approx} 字的貼文文案（單段落），口吻：${tone}。
 可自然帶到品名，但若會讓語句卡或重複，可以不寫品名；如要提及請以自然語境帶過。
 【開頭規則】不得以「最近、近來、近期、這陣子、我最近、小編…」等時間詞或第一人稱作為開頭，請以「特點/效果/情境/結果」起手。
 
@@ -188,41 +176,64 @@ function 生成文案_OpenAI_約長度_朋友口吻(name, desc, tone, targetLen)
 - 長度目標：約 ${approx} 字，建議落在 ${minLen}～${maxLen} 字
 - 直接輸出文案，不要任何解釋`;
 
-  let content = chatCallWithRetry_({ apiKey, model, messages: [
-    { role: 'system', content: system },
-    { role: 'user',   content: user }
-  ], maxTokens: clamp_(Math.round(approx*3), 300, 2048) });
+  // Helper to call Gemini
+  const callGemini = (contents) => {
+    const payload = {
+      contents: contents,
+      systemInstruction: { parts: [{ text: system }] },
+      generationConfig: {
+        maxOutputTokens: clamp_(Math.round(approx*4), 300, 2048),
+        temperature: 0.7
+      }
+    };
+    
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      muteHttpExceptions: true,
+      payload: JSON.stringify(payload)
+    };
+    
+    const resp = UrlFetchApp.fetch(url, options);
+    if (resp.getResponseCode() !== 200) {
+      throw new Error('Gemini API error: ' + resp.getContentText());
+    }
+    const parsed = JSON.parse(resp.getContentText());
+    return parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  };
 
+  // First turn
+  let history = [{ role: 'user', parts: [{ text: userPrompt }] }];
+  let content = callGemini(history);
   content = 去價格字樣_(normalizeOneLine_(content));
 
+  // Length check
   let len = 計字_(content);
   if (len < Math.round(approx*0.75)) {
-    const feedback =
-`你剛產生了約 ${len} 字，偏短。請擴寫到 ${minLen}～${maxLen} 字之間，
+    const feedback = `你剛產生了約 ${len} 字，偏短。請擴寫到 ${minLen}～${maxLen} 字之間，
 補上更具體的感受與情境（香氣/口感/使用時機/誰適合等），
 保持單段、不列點、不口號式結尾，且不要以時間詞或第一人稱開頭。直接輸出最終文本。`;
-    content = chatCallWithRetry_({ apiKey, model, messages: [
-      { role: 'system', content: system },
-      { role: 'user',   content: user },
-      { role: 'assistant', content },
-      { role: 'user',   content: feedback }
-    ], maxTokens: clamp_(Math.round(approx*4), 400, 2048) });
+    
+    history.push({ role: 'model', parts: [{ text: content }] });
+    history.push({ role: 'user', parts: [{ text: feedback }] });
+    
+    content = callGemini(history);
     content = 去價格字樣_(normalizeOneLine_(content));
   }
 
+  // Banned words check
   const bad = 偵測開頭禁詞_(content);
   if (bad) {
-    const feedbackOpen =
-`你剛以「${bad}」開場，違反開頭規則。請改以「特點/效果/情境/結果」為開頭，其餘內容保留，
+    const feedbackOpen = `你剛以「${bad}」開場，違反開頭規則。請改以「特點/效果/情境/結果」為開頭，其餘內容保留，
 單段、不列點、不口號式結尾，長度維持在 ${minLen}～${maxLen} 字。直接輸出最終文本。`;
-    content = chatCallWithRetry_({ apiKey, model, messages: [
-      { role: 'system', content: system },
-      { role: 'user',   content: user },
-      { role: 'assistant', content },
-      { role: 'user',   content: feedbackOpen }
-    ], maxTokens: clamp_(Math.round(approx*3), 300, 1024) });
+    
+    history.push({ role: 'model', parts: [{ text: content }] });
+    history.push({ role: 'user', parts: [{ text: feedbackOpen }] });
+    
+    content = callGemini(history);
     content = 去價格字樣_(normalizeOneLine_(content));
   }
+
   return content;
 }
 
@@ -351,7 +362,7 @@ function 將上架待排轉貼到_FB互動預排表() {
       const desc = info.desc || '';
 
       let text='';
-      try { text = 生成文案_OpenAI_約長度_朋友口吻(name, desc, DEFAULT_TONE, DEFAULT_LEN); }
+      try { text = 生成文案_Gemini_約長度_朋友口吻(name, desc, DEFAULT_TONE, DEFAULT_LEN); }
       catch (e) { text = `生成失敗：${String(e).slice(0,180)}`; }
 
       const weekday = '週' + '日一二三四五六'[p.dateOnly.getDay()];
