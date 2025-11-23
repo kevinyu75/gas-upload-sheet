@@ -39,7 +39,7 @@ function 生成Line推播文案_ActiveRow1() {
     const { name, desc } = 讀取商品資訊_(customID);
 
     // 生成 Line 推播文案
-    let text = 生成Line推播文案_OpenAI(name, desc, approxLen);
+    let text = 生成Line推播文案_Gemini(name, desc, approxLen);
     text = 加入智能Emoji_(text, name, desc); // 第1行 emoji
     text = 清理文案_(text);                   // 去掉物流字眼
     text = 隨機變化文案_(text);               // 第二、三行隨機化
@@ -84,14 +84,15 @@ function 讀取商品資訊_(customID) {
 }
 
 /******************************************************************
- * OpenAI：生成適合 Line 社群的推播文案（範例式 prompt + 字數控制）
+ * Gemini：生成適合 Line 社群的推播文案（範例式 prompt + 字數控制）
  ******************************************************************/
-function 生成Line推播文案_OpenAI(name, desc, approxLen) {
+function 生成Line推播文案_Gemini(name, desc, approxLen) {
   const props  = PropertiesService.getScriptProperties();
-  const apiKey = props.getProperty('openai_api_key');
-  if (!apiKey) throw new Error('缺少 openai_api_key');
+  const apiKey = props.getProperty('gemini_api_key');
+  if (!apiKey) throw new Error('缺少 gemini_api_key');
 
-  const model  = 'gpt-4o-mini'; // 使用 mini 版本
+  // 目前 API 穩定版本為 gemini-1.5-pro，若有更新版本可在此替換
+  const model  = 'gemini-1.5-pro';
 
   const minLen = Math.max(10, Math.round(approxLen * 0.8));
   const maxLen = Math.round(approxLen * 1.2);
@@ -117,29 +118,31 @@ function 生成Line推播文案_OpenAI(name, desc, approxLen) {
 商品內文：${desc}
 `;
 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
   const payload = {
-    model,
-    max_tokens: 512,
-    messages: [
-      { role: 'system', content: '你是中文社群文案助手，專門寫 Line 推播訊息。' },
-      { role: 'user', content: prompt }
-    ]
+    contents: [{
+      parts: [{ text: prompt }]
+    }],
+    generationConfig: {
+      maxOutputTokens: 512,
+      temperature: 0.7
+    }
   };
 
-  const resp = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+  const resp = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
     muteHttpExceptions: true,
-    headers: { Authorization: `Bearer ${apiKey}` },
     payload: JSON.stringify(payload)
   });
 
   if (resp.getResponseCode() !== 200) {
-    throw new Error('OpenAI API error: ' + resp.getContentText());
+    throw new Error('Gemini API error: ' + resp.getContentText());
   }
 
   const parsed = JSON.parse(resp.getContentText());
-  let txt = parsed?.choices?.[0]?.message?.content || '';
+  let txt = parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   if (!txt || txt.trim() === '') txt = '[生成失敗，請重試]';
 
   return txt.trim();
