@@ -151,8 +151,8 @@ function 生成文案_Gemini_約長度_朋友口吻(name, desc, tone, targetLen)
   const apiKey = props.getProperty('gemini_api_key');
   if (!apiKey) throw new Error('缺少 gemini_api_key');
   
-  // 使用者指定測試模型：Gemini 3.0 Pro Preview
-  const model = 'gemini-3.0-pro-preview';
+  // 改回可用的公開預覽版模型
+  const model = 'gemini-2.0-flash-exp';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const approx = Math.max(10, Number(targetLen) || 20);
